@@ -1,0 +1,39 @@
+# CLAUDE.md - auto-generated documentation
+CLAUDE.md
+
+# Compiled binary
+qube-manager
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Config directory with sensitive keys and data
+.qube-manager/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
