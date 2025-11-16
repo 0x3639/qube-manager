@@ -121,7 +121,8 @@ Qube-manager stores its configuration in `~/.qube-manager/` (or a custom directo
 **`config.yaml`**: Main configuration
 ```yaml
 relays:
-  - wss://nostr.zenon.network
+  - wss://qubestr.zenon.info
+  - wss://qubestr.zenon.red
 follows:
   - npub1sr47j9awvw2xa0m4w770dr2rl7ylzq4xt9k5rel3h4h58sc3mjysx6pj64  # George
   - npub1ackp65pgrxp6r27jw82p68cv572r8yxgasnpaqnd2mzexr09gc3ss24gcw  # Vilkris
@@ -134,13 +135,18 @@ network: hqz
 node_id: node-a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
 
-- `relays`: List of Nostr relay WebSocket URLs to connect to
-- `follows`: List of npub (Nostr public keys) to trust for voting (all 6 HC1 developer npubs are pre-configured by default)
-- `quorum`: Minimum number of votes required to trigger an action (default: 3 out of 6 HC1 devs for production safety)
+- `relays`: List of Nostr relay WebSocket URLs to connect to (you can add or remove relays as needed)
+- `follows`: List of npub (Nostr public keys) to trust for voting (pre-configured with all 6 HC1 developers, fully user-editable)
+- `quorum`: Minimum number of votes required to trigger an action (default: 3 out of 6 for production safety, adjust based on your security requirements)
 - `network`: Network identifier (e.g., "hqz", "testnet") - only process events for this network
-- `node_id`: Unique identifier for this node (auto-generated UUID)
+- `node_id`: Unique identifier for this node (auto-generated on first run)
 
-**Note:** The `follows` list is pre-configured with all 6 official HC1 developer npubs (George, Vilkris, Cryptofish, Deeznnutz, Coinselor, Sl0th). You generally don't need to modify this unless instructed by the HC1 team.
+**Default Configuration:** On first run, qube-manager creates `config.yaml` from a template pre-configured with:
+- Official Qubestr relay URLs (qubestr.zenon.info and qubestr.zenon.red)
+- All 6 HC1 developer npubs (George, Vilkris, Cryptofish, Deeznnutz, Coinselor, Sl0th)
+- Quorum of 3 out of 6 for production safety
+
+**You can freely edit this file** to add/remove relays, change trusted developers, or adjust the quorum threshold. The configuration is stored in plain YAML and is fully user-controllable.
 
 **`keys.json`**: Your Nostr identity (auto-generated)
 ```json
