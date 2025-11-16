@@ -101,24 +101,21 @@ func checkAndExecuteQuorum(
 
 	if !dryRun {
 		// Build kind=3333 QubeManager status event
-		network := latest.Network
-		nodeID := "qube-node-" + keypair.Npub[:8] // Temporary placeholder
-
-		// Build tags for kind=3333 event
+		// Use config values for network and node_id
 		tags := nostr.Tags{
 			{"a", fmt.Sprintf("33321:%s:hyperqube", latest.OriginalPubkey)},
 			{"p", latest.OriginalPubkey},
 			{"version", latest.Version.Original()},
-			{"network", network},
+			{"network", config.Network},
 			{"action", latest.Type},
 			{"status", "success"},
-			{"node_id", nodeID},
+			{"node_id", config.NodeID},
 			{"action_at", fmt.Sprintf("%d", time.Now().Unix())},
 		}
 
 		// Build human-readable content
 		content := fmt.Sprintf("[qube-manager] The %s to version %s has been successful on node %s.",
-			latest.Type, latest.Version.Original(), nodeID)
+			latest.Type, latest.Version.Original(), config.NodeID)
 
 		doneEvent := nostr.Event{
 			PubKey:    keypair.Npub,
@@ -341,6 +338,15 @@ func main() {
 					if *verbose {
 						log.Printf("[DEBUG] Skipping event with missing required tags (version=%s, hash=%s, network=%s, action=%s)",
 							version, hash, network, action)
+					}
+					continue
+				}
+
+				// Network filtering: only process events for our configured network
+				if network != config.Network {
+					if *verbose {
+						log.Printf("[DEBUG] Skipping event for network %s (we are %s)",
+							network, config.Network)
 					}
 					continue
 				}

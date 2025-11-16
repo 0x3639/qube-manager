@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"fmt"
 	"log"
 	"net/url"
 	"os"
@@ -15,7 +17,19 @@ type Config struct {
 	Relays     []string `yaml:"relays"`  // List of relay URLs to connect to
 	Follows    []string `yaml:"follows"` // List of Nostr npubs to follow
 	Quorum     int      `yaml:"quorum"`  // Number of follows needed to trigger action
+	Network    string   `yaml:"network"` // Network identifier (e.g., "hqz", "testnet")
+	NodeID     string   `yaml:"node_id"` // Unique node identifier
 	ConfigPath string   `yaml:"-"`       // Path to config directory (not in YAML)
+}
+
+// generateNodeID creates a random UUID-like identifier for the node
+func generateNodeID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		log.Printf("[WARN] Failed to generate random node ID: %v", err)
+		return "node-unknown"
+	}
+	return fmt.Sprintf("node-%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // loadConfig reads the YAML config file or creates a default one if missing,
@@ -30,7 +44,9 @@ func loadConfig(configDir string) Config {
 			Follows: []string{
 				"npub1sr47j9awvw2xa0m4w770dr2rl7ylzq4xt9k5rel3h4h58sc3mjysx6pj64", // george
 			},
-			Quorum: 1,
+			Quorum:  1,
+			Network: "hqz",
+			NodeID:  generateNodeID(),
 		}
 		data, err := yaml.Marshal(defaultCfg)
 		if err != nil {
@@ -56,7 +72,32 @@ func loadConfig(configDir string) Config {
 		log.Fatalf("[ERROR] Failed to parse config file %s: %v", path, err)
 	}
 	cfg.ConfigPath = configDir
-	log.Printf("[INFO] Loaded config: %d relay(s), %d follow(s), quorum=%d", len(cfg.Relays), len(cfg.Follows), cfg.Quorum)
+
+	// Generate missing network/node_id for existing configs and save
+	updated := false
+	if cfg.Network == "" {
+		log.Printf("[WARN] Config missing 'network' field, setting default: hqz")
+		cfg.Network = "hqz"
+		updated = true
+	}
+	if cfg.NodeID == "" {
+		cfg.NodeID = generateNodeID()
+		log.Printf("[WARN] Config missing 'node_id' field, generated: %s", cfg.NodeID)
+		updated = true
+	}
+	if updated {
+		data, err := yaml.Marshal(cfg)
+		if err != nil {
+			log.Printf("[WARN] Failed to marshal updated config: %v", err)
+		} else if err := os.WriteFile(path, data, 0644); err != nil {
+			log.Printf("[WARN] Failed to save updated config: %v", err)
+		} else {
+			log.Printf("[INFO] Updated config saved with network and node_id")
+		}
+	}
+
+	log.Printf("[INFO] Loaded config: %d relay(s), %d follow(s), quorum=%d, network=%s, node_id=%s",
+		len(cfg.Relays), len(cfg.Follows), cfg.Quorum, cfg.Network, cfg.NodeID)
 
 	// Validate npubs
 	for _, npub := range cfg.Follows {
