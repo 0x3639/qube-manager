@@ -27,6 +27,9 @@ go.work.sum
 # Config directory with sensitive keys and data
 .qube-manager/
 
+# Reference directory (not part of qube-manager, used for development reference only)
+qubestr-main/
+
 # IDE
 .vscode/
 .idea/
