@@ -12,9 +12,10 @@ if [ -z "$VERSION" ]; then
     exit 1
 fi
 
-# Validate version format (vX.Y.Z)
-if ! [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    echo "Error: Version must be in format vX.Y.Z (e.g., v1.0.0)"
+# Validate version format (vX.Y.Z or vX.Y.Z-prerelease)
+if ! [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+    echo "Error: Version must be in format vX.Y.Z or vX.Y.Z-prerelease"
+    echo "Examples: v1.0.0, v0.1.0-beta.1, v1.0.0-rc.1"
     exit 1
 fi
 
