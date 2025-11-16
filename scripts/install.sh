@@ -2,10 +2,12 @@
 set -e
 
 # Qube Manager Installation Script
-# Usage: curl -fsSL https://raw.githubusercontent.com/hypercore-one/qube-manager/master/scripts/install.sh | sh
-# Or: wget -qO- https://raw.githubusercontent.com/hypercore-one/qube-manager/master/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/OWNER/qube-manager/master/scripts/install.sh | sh
+# Or: wget -qO- https://raw.githubusercontent.com/OWNER/qube-manager/master/scripts/install.sh | sh
+# Or: REPO=owner/repo curl ... | sh
 
-REPO="hypercore-one/qube-manager"
+# Default repo - can be overridden with REPO environment variable
+REPO="${REPO:-0x3639/qube-manager}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="$HOME/.qube-manager"
 SERVICE_USER="${USER}"
@@ -77,19 +79,31 @@ check_root() {
 
 # Get latest release version
 get_latest_release() {
-    info "Fetching latest release information..."
+    info "Fetching latest release information from ${REPO}..."
 
     # Try using GitHub API
     if command -v curl >/dev/null 2>&1; then
-        LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        API_RESPONSE=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest")
+        LATEST_RELEASE=$(echo "$API_RESPONSE" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+        # Check for API errors
+        if echo "$API_RESPONSE" | grep -q '"message".*"Not Found"'; then
+            error "Repository ${REPO} not found or has no releases. Please check the repository name."
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        LATEST_RELEASE=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        API_RESPONSE=$(wget -qO- "https://api.github.com/repos/${REPO}/releases/latest")
+        LATEST_RELEASE=$(echo "$API_RESPONSE" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+
+        # Check for API errors
+        if echo "$API_RESPONSE" | grep -q '"message".*"Not Found"'; then
+            error "Repository ${REPO} not found or has no releases. Please check the repository name."
+        fi
     else
         error "Neither curl nor wget found. Please install one of them."
     fi
 
     if [ -z "$LATEST_RELEASE" ]; then
-        error "Failed to fetch latest release information"
+        error "Failed to fetch latest release information. API Response: ${API_RESPONSE}"
     fi
 
     info "Latest release: ${LATEST_RELEASE}"
