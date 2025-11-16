@@ -136,12 +136,25 @@ download_binary() {
     # Verify checksum if available
     if [ -f "${CHECKSUM_FILE}" ]; then
         info "Verifying checksum..."
+
+        # Extract just the hash from the checksum file
+        EXPECTED_HASH=$(awk '{print $1}' "${CHECKSUM_FILE}")
+
         if command -v sha256sum >/dev/null 2>&1; then
-            (cd /tmp && sha256sum -c "${CHECKSUM_FILE##*/}" 2>/dev/null) || error "Checksum verification failed"
+            ACTUAL_HASH=$(sha256sum "${TEMP_FILE}" | awk '{print $1}')
         elif command -v shasum >/dev/null 2>&1; then
-            (cd /tmp && shasum -a 256 -c "${CHECKSUM_FILE##*/}" 2>/dev/null) || error "Checksum verification failed"
+            ACTUAL_HASH=$(shasum -a 256 "${TEMP_FILE}" | awk '{print $1}')
         else
             warn "No SHA256 tool found, skipping verification"
+            ACTUAL_HASH=""
+        fi
+
+        if [ -n "$ACTUAL_HASH" ] && [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+            error "Checksum verification failed! Expected: ${EXPECTED_HASH}, Got: ${ACTUAL_HASH}"
+        fi
+
+        if [ -n "$ACTUAL_HASH" ]; then
+            info "Checksum verified successfully"
         fi
     fi
 
