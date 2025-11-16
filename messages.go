@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -32,24 +31,28 @@ type RebootMessage struct {
 
 func sendMessageCLI(configDir string) {
 	var (
-		msgType string
-		version string
-		genesis string
-		extra   string
-		dryRun  bool
+		msgType    string
+		version    string
+		genesis    string
+		hash       string
+		network    string
+		requiredBy string
+		dryRun     bool
 	)
 
 	flagSet := flag.NewFlagSet("send-message", flag.ExitOnError)
-	flagSet.StringVar(&msgType, "type", "", "Message type: 'upgrade' or 'reboot'")
+	flagSet.StringVar(&msgType, "type", "", "Action type: 'upgrade' or 'reboot'")
 	flagSet.StringVar(&version, "version", "", "Semantic version (e.g. v1.2.3)")
+	flagSet.StringVar(&hash, "hash", "", "SHA256 hash of binary (required)")
+	flagSet.StringVar(&network, "network", "", "Network identifier (e.g. 'hqz', 'testnet')")
 	flagSet.StringVar(&genesis, "genesis", "", "Genesis URL (required for 'reboot')")
-	flagSet.StringVar(&extra, "extra", "", "Extra data (optional)")
-	flagSet.BoolVar(&dryRun, "dry-run", false, "Print message instead of sending")
+	flagSet.StringVar(&requiredBy, "required-by", "", "Unix timestamp deadline (optional for 'reboot')")
+	flagSet.BoolVar(&dryRun, "dry-run", false, "Print event instead of sending")
 	flagSet.Parse(os.Args[2:])
 
 	// Validate message type
 	if msgType != "upgrade" && msgType != "reboot" {
-		log.Fatalf("[ERROR] Invalid message type '%s'. Must be 'upgrade' or 'reboot'.", msgType)
+		log.Fatalf("[ERROR] Invalid action type '%s'. Must be 'upgrade' or 'reboot'.", msgType)
 	}
 
 	// Validate version
@@ -60,36 +63,53 @@ func sendMessageCLI(configDir string) {
 		log.Fatalf("[ERROR] Invalid semantic version '%s': %v", version, err)
 	}
 
-	// Validate genesis for reboot
-	if msgType == "reboot" && genesis == "" {
-		log.Fatal("[ERROR] Genesis URL is required for reboot messages.")
+	// Validate required fields
+	if hash == "" {
+		log.Fatal("[ERROR] Hash is required (use --hash flag)")
+	}
+	if network == "" {
+		log.Fatal("[ERROR] Network is required (use --network flag)")
 	}
 
-	// Build message content
-	var content []byte
-	var err error
-	switch msgType {
-	case "upgrade":
-		content, err = json.Marshal(UpgradeMessage{
-			Type:      "upgrade",
-			Version:   version,
-			ExtraData: extra,
-		})
-	case "reboot":
-		content, err = json.Marshal(RebootMessage{
-			Type:      "reboot",
-			Version:   version,
-			Genesis:   genesis,
-			ExtraData: extra,
-		})
+	// Validate genesis for reboot
+	if msgType == "reboot" && genesis == "" {
+		log.Fatal("[ERROR] Genesis URL is required for reboot messages (use --genesis flag)")
 	}
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to marshal message: %v", err)
+
+	// Build event tags based on action type
+	tags := nostr.Tags{
+		{"d", "hyperqube"},
+		{"version", version},
+		{"hash", hash},
+		{"network", network},
+		{"action", msgType},
+	}
+
+	// Add reboot-specific tags
+	if msgType == "reboot" {
+		tags = append(tags, nostr.Tag{"genesis_url", genesis})
+		if requiredBy != "" {
+			tags = append(tags, nostr.Tag{"required_by", requiredBy})
+		}
+	}
+
+	// Build human-readable content
+	var content string
+	if msgType == "upgrade" {
+		content = fmt.Sprintf("[hypersignal] A HyperQube upgrade has been released for network %s. Please update binary to version %s.",
+			network, version)
+	} else {
+		content = fmt.Sprintf("[hypersignal] A HyperQube reboot for network %s version %s has been scheduled.",
+			network, version)
+		if requiredBy != "" {
+			content += fmt.Sprintf(" Required by timestamp %s.", requiredBy)
+		}
 	}
 
 	if dryRun {
-		log.Println("[DRY RUN] Prepared message to publish:")
-		fmt.Println(string(content))
+		log.Println("[DRY RUN] Prepared HyperSignal event (kind 33321):")
+		fmt.Printf("Tags: %v\n", tags)
+		fmt.Printf("Content: %s\n", content)
 		return
 	}
 
@@ -106,15 +126,19 @@ func sendMessageCLI(configDir string) {
 		return
 	}
 
+	// Create kind 33321 HyperSignal event
 	ev := nostr.Event{
 		PubKey:    kp.Npub,
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
-		Kind:      nostr.KindTextNote,
-		Content:   string(content),
+		Kind:      33321,
+		Tags:      tags,
+		Content:   content,
 	}
 	if err := ev.Sign(privKey.(string)); err != nil {
 		log.Fatalf("[ERROR] Failed to sign event: %v", err)
 	}
+
+	log.Printf("[INFO] Created HyperSignal event (kind 33321) for %s action, version %s", msgType, version)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
