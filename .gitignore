@@ -1,6 +1,9 @@
 # CLAUDE.md - auto-generated documentation
 CLAUDE.md
 
+# Claude working directory
+.claude/
+
 # Compiled binary
 qube-manager
 

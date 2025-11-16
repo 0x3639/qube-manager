@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
@@ -120,6 +119,12 @@ func sendMessageCLI(configDir string) {
 		log.Fatalf("[ERROR] Invalid private key: %v", err)
 	}
 
+	// Decode npub to hex pubkey
+	_, pubKeyHex, err := nip19.Decode(kp.Npub)
+	if err != nil {
+		log.Fatalf("[ERROR] Invalid public key: %v", err)
+	}
+
 	cfg := loadConfig(configDir)
 	if len(cfg.Relays) == 0 {
 		log.Println("[WARN] No relays configured; message will not be sent.")
@@ -128,7 +133,7 @@ func sendMessageCLI(configDir string) {
 
 	// Create kind 33321 HyperSignal event
 	ev := nostr.Event{
-		PubKey:    kp.Npub,
+		PubKey:    pubKeyHex.(string),
 		CreatedAt: nostr.Timestamp(time.Now().Unix()),
 		Kind:      33321,
 		Tags:      tags,
@@ -140,32 +145,39 @@ func sendMessageCLI(configDir string) {
 
 	log.Printf("[INFO] Created HyperSignal event (kind 33321) for %s action, version %s", msgType, version)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	for _, relayURL := range cfg.Relays {
-		wg.Add(1)
-		go func(url string) {
-			defer wg.Done()
-			log.Printf("[INFO] Connecting to relay %s", url)
-			r, err := nostr.RelayConnect(ctx, url)
-			if err != nil {
-				log.Printf("[WARN] Could not connect to relay %s: %v", url, err)
-				return
-			}
-			defer r.Close()
+	// Create auth handler that will respond to AUTH challenges from relay
+	authHandler := nostr.WithAuthHandler(func(authCtx context.Context, authEvent nostr.RelayEvent) error {
+		evt := authEvent.Event
+		log.Printf("[DEBUG] Relay %s requested auth, signing challenge", authEvent.Relay.URL)
+		log.Printf("[DEBUG] AUTH challenge tags: %v", evt.Tags)
+		if err := evt.Sign(privKey.(string)); err != nil {
+			log.Printf("[ERROR] Failed to sign AUTH event: %v", err)
+			return err
+		}
+		log.Printf("[INFO] Successfully signed AUTH event for %s", authEvent.Relay.URL)
+		return nil
+	})
 
-			log.Printf("[INFO] Publishing message to relay %s", url)
-			if err := r.Publish(ctx, ev); err != nil {
-				log.Printf("[WARN] Failed to publish to relay %s: %v", url, err)
-				return
-			}
+	// Use SimplePool with auth handler for proper NIP-42 support
+	pool := nostr.NewSimplePool(ctx, authHandler)
 
-			log.Printf("[INFO] Successfully published message to relay %s", url)
-		}(relayURL)
+	log.Printf("[INFO] Publishing message to %d relay(s)", len(cfg.Relays))
+
+	// Publish to all relays
+	statuses := pool.PublishMany(ctx, cfg.Relays, ev)
+
+	successCount := 0
+	for status := range statuses {
+		if status.Error != nil {
+			log.Printf("[WARN] Failed to publish to relay %s: %v", status.Relay.URL, status.Error)
+		} else {
+			log.Printf("[INFO] Successfully published message to relay %s", status.Relay.URL)
+			successCount++
+		}
 	}
 
-	wg.Wait()
-	log.Println("[INFO] Finished publishing message to all configured relays.")
+	log.Printf("[INFO] Finished publishing message to %d/%d relays", successCount, len(cfg.Relays))
 }

@@ -267,217 +267,216 @@ func main() {
 
 	log.Printf("[INFO] Started quorum check ticker (interval: 60s)")
 
-	// Connect to each relay and subscribe to relevant events
-	var wg sync.WaitGroup
-	for _, relayURL := range config.Relays {
-		wg.Add(1)
-		go func(relayURL string) {
-			defer wg.Done()
+	// Decode all npubs to hex pubkeys for filtering
+	hexFollows := make([]string, 0, len(config.Follows))
+	for _, npub := range config.Follows {
+		kind, pubkeyAny, err := nip19.Decode(npub)
+		if err != nil {
+			log.Printf("[WARN] Skipping invalid npub (%s): %v", npub, err)
+			continue
+		}
+		if kind != "npub" {
+			log.Printf("[WARN] Expected npub but got %s: %s", kind, npub)
+			continue
+		}
+		pubkey, ok := pubkeyAny.(string)
+		if !ok {
+			log.Printf("[WARN] Unexpected pubkey format for %s: %v", npub, pubkeyAny)
+			continue
+		}
+		hexFollows = append(hexFollows, pubkey)
+	}
+	log.Printf("[INFO] Decoded %d valid npubs for following", len(hexFollows))
 
-			start := time.Now()
-			log.Printf("[INFO] Connecting to relay: %s", relayURL)
-			relay, err := nostr.RelayConnect(ctx, relayURL)
-			if err != nil {
-				log.Printf("[WARN] Failed to connect to relay %s: %v (took %v)", relayURL, err, time.Since(start))
-				return
-			}
-			log.Printf("[INFO] Connected to relay: %s (took %v)", relayURL, time.Since(start))
-
-			// Decode all npubs to hex pubkeys for filtering
-			hexFollows := make([]string, 0, len(config.Follows))
-			for _, npub := range config.Follows {
-				kind, pubkeyAny, err := nip19.Decode(npub)
-				if err != nil {
-					log.Printf("[WARN] Skipping invalid npub (%s): %v", npub, err)
-					continue
-				}
-				if kind != "npub" {
-					log.Printf("[WARN] Expected npub but got %s: %s", kind, npub)
-					continue
-				}
-				pubkey, ok := pubkeyAny.(string)
-				if !ok {
-					log.Printf("[WARN] Unexpected pubkey format for %s: %v", npub, pubkeyAny)
-					continue
-				}
-				hexFollows = append(hexFollows, pubkey)
-			}
-			log.Printf("[INFO] Relay %s: decoded %d valid npubs for following", relayURL, len(hexFollows))
-
-			// Subscribe to kind=33321 (HyperSignal) events authored by followed pubkeys
-			sub, err := relay.Subscribe(ctx, nostr.Filters{{
-				Authors: hexFollows,
-				Kinds:   []int{33321},
-				Tags:    nostr.TagMap{"d": []string{"hyperqube"}},
-			}})
-			if err != nil {
-				log.Printf("[ERROR] Subscription failed on %s: %v", relayURL, err)
-				return
-			}
-			log.Printf("[INFO] Subscription successful on %s", relayURL)
-
-			// Read events and parse HyperSignal messages from tags
-			for ev := range sub.Events {
-				select {
-				case <-ctx.Done():
-					log.Printf("[INFO] Context cancelled, stopping event processing for relay %s", relayURL)
-					return
-				default:
-				}
-
-				// Validate required tags
-				dTag := getTagValue(ev, "d")
-				if dTag != "hyperqube" {
-					if *verbose {
-						log.Printf("[DEBUG] Skipping event with wrong d tag: %s", dTag)
-					}
-					continue
-				}
-
-				// Extract required tags
-				version := getTagValue(ev, "version")
-				hash := getTagValue(ev, "hash")
-				network := getTagValue(ev, "network")
-				action := getTagValue(ev, "action")
-
-				// Validate required tags are present
-				if version == "" || hash == "" || network == "" || action == "" {
-					if *verbose {
-						log.Printf("[DEBUG] Skipping event with missing required tags (version=%s, hash=%s, network=%s, action=%s)",
-							version, hash, network, action)
-					}
-					continue
-				}
-
-				// Network filtering: only process events for our configured network
-				if network != config.Network {
-					if *verbose {
-						log.Printf("[DEBUG] Skipping event for network %s (we are %s)",
-							network, config.Network)
-					}
-					continue
-				}
-
-				// Parse semantic version
-				v, err := semver.NewVersion(version)
-				if err != nil {
-					log.Printf("[WARN] Invalid semantic version: %s", version)
-					continue
-				}
-
-				// Lock for writing to actions/votes maps
-				actionsMux.Lock()
-
-				// Single active message model: Check if this is a newer signal from this dev
-				if prevTimestamp, exists := latestSignal[ev.PubKey]; exists {
-					if ev.CreatedAt > prevTimestamp {
-						// This is a newer signal from the same dev - clear old votes
-						if oldActionKey, hasOldAction := signalActionMap[ev.PubKey]; hasOldAction {
-							// Remove this dev's vote from the old action
-							if oldVotes, oldVotesExist := votes[oldActionKey]; oldVotesExist {
-								delete(oldVotes, ev.PubKey)
-								log.Printf("[INFO] Cleared vote from pubkey %s for old action %s (superseded by newer signal)",
-									ev.PubKey[:8]+"...", oldActionKey)
-							}
-						}
-					} else {
-						// This signal is older than what we've already seen from this dev - ignore it
-						actionsMux.Unlock()
-						if *verbose {
-							log.Printf("[DEBUG] Ignoring older signal from pubkey %s (timestamp %d < %d)",
-								ev.PubKey[:8]+"...", ev.CreatedAt, prevTimestamp)
-						}
-						continue
-					}
-				}
-
-				switch action {
-				case "upgrade":
-					key := fmt.Sprintf("upgrade:%s", v.Original())
-					actionStruct, exists := actions[key]
-					if !exists {
-						actionStruct = &CandidateAction{
-							Type:           "upgrade",
-							Version:        v,
-							Key:            key,
-							Hash:           hash,
-							Network:        network,
-							OriginalPubkey: ev.PubKey,
-						}
-						actions[key] = actionStruct
-					}
-
-					if votes[key] == nil {
-						votes[key] = make(map[string]bool)
-					}
-					votes[key][ev.PubKey] = true
-
-					// Update tracking for single active message model
-					latestSignal[ev.PubKey] = ev.CreatedAt
-					signalActionMap[ev.PubKey] = key
-
-					log.Printf("[INFO] Parsed upgrade signal: version=%s network=%s hash=%s pubkey=%s",
-						v.Original(), network, hash[:8]+"...", ev.PubKey[:8]+"...")
-
-				case "reboot":
-					genesisURL := getTagValue(ev, "genesis_url")
-					if genesisURL == "" {
-						actionsMux.Unlock()
-						log.Printf("[WARN] Reboot action missing genesis_url tag")
-						continue
-					}
-
-					if _, err := url.ParseRequestURI(genesisURL); err != nil {
-						actionsMux.Unlock()
-						log.Printf("[WARN] Invalid genesis URL in reboot: %s", genesisURL)
-						continue
-					}
-
-					key := fmt.Sprintf("reboot:%s:%s", v.Original(), genesisURL)
-					actionStruct, exists := actions[key]
-					if !exists {
-						actionStruct = &CandidateAction{
-							Type:           "reboot",
-							Version:        v,
-							Key:            key,
-							Genesis:        genesisURL,
-							Hash:           hash,
-							Network:        network,
-							OriginalPubkey: ev.PubKey,
-						}
-						actions[key] = actionStruct
-					}
-
-					if votes[key] == nil {
-						votes[key] = make(map[string]bool)
-					}
-					votes[key][ev.PubKey] = true
-
-					// Update tracking for single active message model
-					latestSignal[ev.PubKey] = ev.CreatedAt
-					signalActionMap[ev.PubKey] = key
-
-					log.Printf("[INFO] Parsed reboot signal: version=%s network=%s genesis=%s hash=%s pubkey=%s",
-						v.Original(), network, genesisURL, hash[:8]+"...", ev.PubKey[:8]+"...")
-
-				default:
-					if *verbose {
-						log.Printf("[DEBUG] Ignoring event with unknown action type: %s", action)
-					}
-				}
-
-				actionsMux.Unlock()
-			}
-
-			log.Printf("[INFO] Event stream ended for relay %s", relayURL)
-		}(relayURL)
+	// Decode private key for NIP-42 authentication
+	_, privKey, err := nip19.Decode(keypair.Nsec)
+	if err != nil {
+		log.Fatalf("[ERROR] Failed to decode private key: %v", err)
 	}
 
-	// Wait for all relay goroutines to finish or context to be cancelled
-	log.Printf("[INFO] All relay connections started. Daemon running. Press Ctrl+C to stop.")
+	// Create auth handler for NIP-42 authentication
+	authHandler := nostr.WithAuthHandler(func(authCtx context.Context, authEvent nostr.RelayEvent) error {
+		evt := authEvent.Event
+		if *verbose {
+			log.Printf("[DEBUG] Relay %s requested auth, signing challenge", authEvent.Relay.URL)
+			log.Printf("[DEBUG] AUTH challenge tags: %v", evt.Tags)
+		}
+		if err := evt.Sign(privKey.(string)); err != nil {
+			log.Printf("[ERROR] Failed to sign AUTH event for %s: %v", authEvent.Relay.URL, err)
+			return err
+		}
+		log.Printf("[INFO] Authenticated with relay %s", authEvent.Relay.URL)
+		return nil
+	})
 
-	// Wait for shutdown signal
-	wg.Wait()
-	log.Printf("[INFO] All relay goroutines have finished")
+	// Create SimplePool with auth handler for proper NIP-42 support
+	pool := nostr.NewSimplePool(ctx, authHandler)
+
+	// Subscribe to kind=33321 (HyperSignal) events from followed pubkeys across all relays
+	filters := nostr.Filters{{
+		Authors: hexFollows,
+		Kinds:   []int{33321},
+		Tags:    nostr.TagMap{"d": []string{"hyperqube"}},
+	}}
+
+	log.Printf("[INFO] Subscribing to %d relay(s) for kind=33321 events", len(config.Relays))
+	events := pool.SubMany(ctx, config.Relays, filters)
+
+	// Read events from all relays
+	for relayEvent := range events {
+		select {
+		case <-ctx.Done():
+			log.Printf("[INFO] Context cancelled, stopping event processing")
+			return
+		default:
+		}
+
+		ev := relayEvent.Event
+
+		// Validate required tags
+		dTag := getTagValue(ev, "d")
+		if dTag != "hyperqube" {
+			if *verbose {
+				log.Printf("[DEBUG] Skipping event with wrong d tag: %s", dTag)
+			}
+			continue
+		}
+
+		// Extract required tags
+		version := getTagValue(ev, "version")
+		hash := getTagValue(ev, "hash")
+		network := getTagValue(ev, "network")
+		action := getTagValue(ev, "action")
+
+		// Validate required tags are present
+		if version == "" || hash == "" || network == "" || action == "" {
+			if *verbose {
+				log.Printf("[DEBUG] Skipping event with missing required tags (version=%s, hash=%s, network=%s, action=%s)",
+					version, hash, network, action)
+			}
+			continue
+		}
+
+		// Network filtering: only process events for our configured network
+		if network != config.Network {
+			if *verbose {
+				log.Printf("[DEBUG] Skipping event for network %s (we are %s)",
+					network, config.Network)
+			}
+			continue
+		}
+
+		// Parse semantic version
+		v, err := semver.NewVersion(version)
+		if err != nil {
+			log.Printf("[WARN] Invalid semantic version: %s", version)
+			continue
+		}
+
+		// Lock for writing to actions/votes maps
+		actionsMux.Lock()
+
+		// Single active message model: Check if this is a newer signal from this dev
+		if prevTimestamp, exists := latestSignal[ev.PubKey]; exists {
+			if ev.CreatedAt > prevTimestamp {
+				// This is a newer signal from the same dev - clear old votes
+				if oldActionKey, hasOldAction := signalActionMap[ev.PubKey]; hasOldAction {
+					// Remove this dev's vote from the old action
+					if oldVotes, oldVotesExist := votes[oldActionKey]; oldVotesExist {
+						delete(oldVotes, ev.PubKey)
+						log.Printf("[INFO] Cleared vote from pubkey %s for old action %s (superseded by newer signal)",
+							ev.PubKey[:8]+"...", oldActionKey)
+					}
+				}
+			} else {
+				// This signal is older than what we've already seen from this dev - ignore it
+				actionsMux.Unlock()
+				if *verbose {
+					log.Printf("[DEBUG] Ignoring older signal from pubkey %s (timestamp %d < %d)",
+						ev.PubKey[:8]+"...", ev.CreatedAt, prevTimestamp)
+				}
+				continue
+			}
+		}
+
+		switch action {
+		case "upgrade":
+			key := fmt.Sprintf("upgrade:%s", v.Original())
+			actionStruct, exists := actions[key]
+			if !exists {
+				actionStruct = &CandidateAction{
+					Type:           "upgrade",
+					Version:        v,
+					Key:            key,
+					Hash:           hash,
+					Network:        network,
+					OriginalPubkey: ev.PubKey,
+				}
+				actions[key] = actionStruct
+			}
+
+			if votes[key] == nil {
+				votes[key] = make(map[string]bool)
+			}
+			votes[key][ev.PubKey] = true
+
+			// Update tracking for single active message model
+			latestSignal[ev.PubKey] = ev.CreatedAt
+			signalActionMap[ev.PubKey] = key
+
+			log.Printf("[INFO] Parsed upgrade signal: version=%s network=%s hash=%s pubkey=%s",
+				v.Original(), network, hash[:8]+"...", ev.PubKey[:8]+"...")
+
+		case "reboot":
+			genesisURL := getTagValue(ev, "genesis_url")
+			if genesisURL == "" {
+				actionsMux.Unlock()
+				log.Printf("[WARN] Reboot action missing genesis_url tag")
+				continue
+			}
+
+			if _, err := url.ParseRequestURI(genesisURL); err != nil {
+				actionsMux.Unlock()
+				log.Printf("[WARN] Invalid genesis URL in reboot: %s", genesisURL)
+				continue
+			}
+
+			key := fmt.Sprintf("reboot:%s:%s", v.Original(), genesisURL)
+			actionStruct, exists := actions[key]
+			if !exists {
+				actionStruct = &CandidateAction{
+					Type:           "reboot",
+					Version:        v,
+					Key:            key,
+					Genesis:        genesisURL,
+					Hash:           hash,
+					Network:        network,
+					OriginalPubkey: ev.PubKey,
+				}
+				actions[key] = actionStruct
+			}
+
+			if votes[key] == nil {
+				votes[key] = make(map[string]bool)
+			}
+			votes[key][ev.PubKey] = true
+
+			// Update tracking for single active message model
+			latestSignal[ev.PubKey] = ev.CreatedAt
+			signalActionMap[ev.PubKey] = key
+
+			log.Printf("[INFO] Parsed reboot signal: version=%s network=%s genesis=%s hash=%s pubkey=%s",
+				v.Original(), network, genesisURL, hash[:8]+"...", ev.PubKey[:8]+"...")
+
+		default:
+			if *verbose {
+				log.Printf("[DEBUG] Ignoring event with unknown action type: %s", action)
+			}
+		}
+
+		actionsMux.Unlock()
+	}
+
+	log.Printf("[INFO] Event stream ended")
 	log.Printf("[INFO] Qube Manager shutting down cleanly")
 }
