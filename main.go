@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -18,10 +17,33 @@ import (
 
 // CandidateAction holds details of a potential action to perform
 type CandidateAction struct {
-	Version *semver.Version // Parsed semantic version
-	Type    string          // "upgrade" or "reboot"
-	Key     string          // Unique history key
-	Genesis string          // Genesis URL for reboot, empty for upgrade
+	Version        *semver.Version // Parsed semantic version
+	Type           string          // "upgrade" or "reboot"
+	Key            string          // Unique history key
+	Genesis        string          // Genesis URL for reboot, empty for upgrade
+	Hash           string          // SHA256 hash of binary
+	Network        string          // Network identifier (e.g., "hqz")
+	OriginalPubkey string          // Pubkey of dev who issued the signal (for kind=3333 reference)
+}
+
+// getTagValue returns the value of the first tag with the given name, or empty string if not found
+func getTagValue(event *nostr.Event, tagName string) string {
+	for _, tag := range event.Tags {
+		if len(tag) >= 2 && tag[0] == tagName {
+			return tag[1]
+		}
+	}
+	return ""
+}
+
+// hasTag returns true if the event has a tag with the given name
+func hasTag(event *nostr.Event, tagName string) bool {
+	for _, tag := range event.Tags {
+		if len(tag) > 0 && tag[0] == tagName {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -117,10 +139,11 @@ func main() {
 		}
 		log.Printf("[INFO] Relay %s: decoded %d valid npubs for following", relayURL, len(hexFollows))
 
-		// Subscribe to kind=1 events authored by followed pubkeys
+		// Subscribe to kind=33321 (HyperSignal) events authored by followed pubkeys
 		sub, err := relay.Subscribe(ctx, nostr.Filters{{
 			Authors: hexFollows,
-			Kinds:   []int{1},
+			Kinds:   []int{33321},
+			Tags:    nostr.TagMap{"d": []string{"hyperqube"}},
 		}})
 		if err != nil {
 			log.Printf("[ERROR] Subscription failed on %s: %v", relayURL, err)
@@ -135,40 +158,53 @@ func main() {
 			log.Printf("[INFO] Subscription on relay %s closed", relayURL)
 		}(relayURL)
 
-		// Read events and parse messages
+		// Read events and parse HyperSignal messages from tags
 		for ev := range sub.Events {
-			// Try to detect message type early
-			var meta struct{ Type string }
-			if err := json.Unmarshal([]byte(ev.Content), &meta); err != nil {
+			// Validate required tags
+			dTag := getTagValue(ev, "d")
+			if dTag != "hyperqube" {
 				if *verbose {
-					log.Printf("[DEBUG] Skipping event with invalid JSON from pubkey %s: %s", ev.PubKey, ev.Content)
+					log.Printf("[DEBUG] Skipping event with wrong d tag: %s", dTag)
 				}
 				continue
 			}
 
-			switch meta.Type {
+			// Extract required tags
+			version := getTagValue(ev, "version")
+			hash := getTagValue(ev, "hash")
+			network := getTagValue(ev, "network")
+			action := getTagValue(ev, "action")
+
+			// Validate required tags are present
+			if version == "" || hash == "" || network == "" || action == "" {
+				if *verbose {
+					log.Printf("[DEBUG] Skipping event with missing required tags (version=%s, hash=%s, network=%s, action=%s)",
+						version, hash, network, action)
+				}
+				continue
+			}
+
+			// Parse semantic version
+			v, err := semver.NewVersion(version)
+			if err != nil {
+				log.Printf("[WARN] Invalid semantic version: %s", version)
+				continue
+			}
+
+			switch action {
 			case "upgrade":
-				var msg UpgradeMessage
-				if err := json.Unmarshal([]byte(ev.Content), &msg); err != nil {
-					log.Printf("[WARN] Failed to parse upgrade message: %v", err)
-					continue
-				}
-
-				v, err := semver.NewVersion(msg.Version)
-				if err != nil {
-					log.Printf("[WARN] Invalid semantic version in upgrade: %s", msg.Version)
-					continue
-				}
-
 				key := fmt.Sprintf("upgrade:%s", v.Original())
-				action, exists := actions[key]
+				actionStruct, exists := actions[key]
 				if !exists {
-					action = &CandidateAction{
-						Type:    "upgrade",
-						Version: v,
-						Key:     key,
+					actionStruct = &CandidateAction{
+						Type:           "upgrade",
+						Version:        v,
+						Key:            key,
+						Hash:           hash,
+						Network:        network,
+						OriginalPubkey: ev.PubKey,
 					}
-					actions[key] = action
+					actions[key] = actionStruct
 				}
 
 				if votes[key] == nil {
@@ -176,36 +212,34 @@ func main() {
 				}
 				votes[key][ev.PubKey] = true
 
-				log.Printf("[INFO] Parsed upgrade message: version=%s pubkey=%s", v.Original(), ev.PubKey)
+				log.Printf("[INFO] Parsed upgrade signal: version=%s network=%s hash=%s pubkey=%s",
+					v.Original(), network, hash[:8]+"...", ev.PubKey[:8]+"...")
 
 			case "reboot":
-				var msg RebootMessage
-				if err := json.Unmarshal([]byte(ev.Content), &msg); err != nil {
-					log.Printf("[WARN] Failed to parse reboot message: %v", err)
+				genesisURL := getTagValue(ev, "genesis_url")
+				if genesisURL == "" {
+					log.Printf("[WARN] Reboot action missing genesis_url tag")
 					continue
 				}
 
-				if _, err := url.ParseRequestURI(msg.Genesis); err != nil {
-					log.Printf("[WARN] Invalid genesis URL in reboot: %s", msg.Genesis)
+				if _, err := url.ParseRequestURI(genesisURL); err != nil {
+					log.Printf("[WARN] Invalid genesis URL in reboot: %s", genesisURL)
 					continue
 				}
 
-				v, err := semver.NewVersion(msg.Version)
-				if err != nil {
-					log.Printf("[WARN] Invalid semantic version in reboot: %s", msg.Version)
-					continue
-				}
-
-				key := fmt.Sprintf("reboot:%s:%s", v.Original(), msg.Genesis)
-				action, exists := actions[key]
+				key := fmt.Sprintf("reboot:%s:%s", v.Original(), genesisURL)
+				actionStruct, exists := actions[key]
 				if !exists {
-					action = &CandidateAction{
-						Type:    "reboot",
-						Version: v,
-						Key:     key,
-						Genesis: msg.Genesis,
+					actionStruct = &CandidateAction{
+						Type:           "reboot",
+						Version:        v,
+						Key:            key,
+						Genesis:        genesisURL,
+						Hash:           hash,
+						Network:        network,
+						OriginalPubkey: ev.PubKey,
 					}
-					actions[key] = action
+					actions[key] = actionStruct
 				}
 
 				if votes[key] == nil {
@@ -213,11 +247,12 @@ func main() {
 				}
 				votes[key][ev.PubKey] = true
 
-				log.Printf("[INFO] Parsed reboot message: version=%s genesis=%s pubkey=%s", v.Original(), msg.Genesis, ev.PubKey)
+				log.Printf("[INFO] Parsed reboot signal: version=%s network=%s genesis=%s hash=%s pubkey=%s",
+					v.Original(), network, genesisURL, hash[:8]+"...", ev.PubKey[:8]+"...")
 
 			default:
 				if *verbose {
-					log.Printf("[DEBUG] Ignoring event with unknown type: %s", meta.Type)
+					log.Printf("[DEBUG] Ignoring event with unknown action type: %s", action)
 				}
 			}
 		}
@@ -257,38 +292,33 @@ func main() {
 		}
 
 		if !*dryRun {
-			var content []byte
-			var err error
+			// Build kind=3333 QubeManager status event
+			// Note: network and node_id will use placeholder values until Phase 4
+			network := latest.Network
+			nodeID := "qube-node-" + keypair.Npub[:8] // Temporary placeholder
 
-			switch latest.Type {
-			case "upgrade":
-				doneMsg := UpgradeMessage{
-					Type:      "upgrade",
-					Version:   latest.Version.Original(),
-					ExtraData: "done",
-				}
-				content, err = json.Marshal(doneMsg)
-
-			case "reboot":
-				doneMsg := RebootMessage{
-					Type:      "reboot",
-					Version:   latest.Version.Original(),
-					Genesis:   latest.Genesis,
-					ExtraData: "done",
-				}
-				content, err = json.Marshal(doneMsg)
+			// Build tags for kind=3333 event
+			tags := nostr.Tags{
+				{"a", fmt.Sprintf("33321:%s:hyperqube", latest.OriginalPubkey)},
+				{"p", latest.OriginalPubkey},
+				{"version", latest.Version.Original()},
+				{"network", network},
+				{"action", latest.Type},
+				{"status", "success"},
+				{"node_id", nodeID},
+				{"action_at", fmt.Sprintf("%d", time.Now().Unix())},
 			}
 
-			if err != nil {
-				log.Printf("[ERROR] Failed to marshal done message: %v", err)
-				return
-			}
+			// Build human-readable content
+			content := fmt.Sprintf("[qube-manager] The %s to version %s has been successful on node %s.",
+				latest.Type, latest.Version.Original(), nodeID)
 
 			doneEvent := nostr.Event{
 				PubKey:    keypair.Npub,
 				CreatedAt: nostr.Timestamp(time.Now().Unix()),
-				Kind:      nostr.KindTextNote,
-				Content:   string(content),
+				Kind:      3333,
+				Tags:      tags,
+				Content:   content,
 			}
 
 			_, priv, err := nip19.Decode(keypair.Nsec)
@@ -297,11 +327,11 @@ func main() {
 			}
 
 			if err := doneEvent.Sign(priv.(string)); err != nil {
-				log.Printf("[ERROR] Error signing done event: %v", err)
+				log.Printf("[ERROR] Error signing status event: %v", err)
 				return
 			}
 
-			log.Printf("[INFO] Publishing done event for action %s to %d relays", latest.Key, len(config.Relays))
+			log.Printf("[INFO] Publishing kind=3333 status event for action %s to %d relays", latest.Key, len(config.Relays))
 
 			for _, r := range config.Relays {
 				go func(url string) {
