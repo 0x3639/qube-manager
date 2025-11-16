@@ -1,0 +1,172 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.0.0, v2.1.3, etc.
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get version from tag
+      id: get_version
+      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        # Get the previous tag
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+        # Generate changelog
+        if [ -z "$PREV_TAG" ]; then
+          # First release - get all commits
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --reverse)
+        else
+          # Get commits since previous tag
+          CHANGELOG=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --reverse)
+        fi
+
+        # Create release notes
+        cat > release_notes.md << EOF
+        ## What's Changed
+
+        ${CHANGELOG}
+
+        ## Installation
+
+        Download the appropriate binary for your platform below.
+
+        **Linux:**
+        \`\`\`bash
+        wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/qube-manager-linux-amd64
+        chmod +x qube-manager-linux-amd64
+        sudo mv qube-manager-linux-amd64 /usr/local/bin/qube-manager
+        \`\`\`
+
+        **macOS:**
+        \`\`\`bash
+        wget https://github.com/${{ github.repository }}/releases/download/${{ steps.get_version.outputs.version }}/qube-manager-darwin-arm64
+        chmod +x qube-manager-darwin-arm64
+        sudo mv qube-manager-darwin-arm64 /usr/local/bin/qube-manager
+        \`\`\`
+
+        **Verify installation:**
+        \`\`\`bash
+        qube-manager --version
+        \`\`\`
+
+        ---
+
+        **Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.get_version.outputs.version }}
+        EOF
+
+        cat release_notes.md
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.get_version.outputs.version }}
+        release_name: Release ${{ steps.get_version.outputs.version }}
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+
+  build-and-upload:
+    name: Build and Upload Release Assets
+    needs: create-release
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Get version info
+      id: version
+      run: |
+        VERSION=${{ needs.create-release.outputs.version }}
+        COMMIT=$(git rev-parse --short HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "date=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Build
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        OUTPUT_NAME=qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          OUTPUT_NAME="${OUTPUT_NAME}.exe"
+        fi
+
+        go build -v \
+          -ldflags="-s -w \
+                    -X 'main.Version=${{ steps.version.outputs.version }}' \
+                    -X 'main.GitCommit=${{ steps.version.outputs.commit }}' \
+                    -X 'main.BuildDate=${{ steps.version.outputs.date }}'" \
+          -o "${OUTPUT_NAME}" .
+
+        # Create checksum
+        sha256sum "${OUTPUT_NAME}" > "${OUTPUT_NAME}.sha256"
+
+        ls -lh "${OUTPUT_NAME}"*
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+        asset_name: qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}
+        asset_content_type: application/octet-stream
+
+    - name: Upload Checksum
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}.sha256
+        asset_name: qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.goos == 'windows' && '.exe' || '' }}.sha256
+        asset_content_type: text/plain

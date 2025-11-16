@@ -273,6 +273,51 @@ qube-manager/
 - `github.com/Masterminds/semver/v3` - Semantic versioning
 - `gopkg.in/yaml.v3` - YAML parsing
 
+### Creating Releases
+
+To create a new release:
+
+1. **Ensure you're on master with latest changes:**
+   ```bash
+   git checkout master
+   git pull origin master
+   ```
+
+2. **Run the release script:**
+   ```bash
+   ./scripts/release.sh v1.0.0
+   ```
+
+   The script will:
+   - Validate the version format (must be vX.Y.Z)
+   - Check for uncommitted changes
+   - Show a changelog of commits since the last release
+   - Create and push a git tag
+
+3. **GitHub Actions automatically:**
+   - Builds binaries for all platforms (Linux, macOS, Windows)
+   - Generates release notes from commit messages
+   - Creates a GitHub release
+   - Uploads binary assets with SHA256 checksums
+
+4. **Monitor the release:**
+   ```bash
+   # Get your repository URL
+   REPO=$(git remote get-url origin | sed 's/.*github.com[:/]\(.*\)\.git/\1/')
+
+   # View workflow progress
+   echo "https://github.com/$REPO/actions"
+
+   # View releases
+   echo "https://github.com/$REPO/releases"
+   ```
+
+**Manual release** (without script):
+```bash
+git tag -a v1.0.0 -m "Release v1.0.0"
+git push origin v1.0.0
+```
+
 ## License
 
 See LICENSE file for details.
