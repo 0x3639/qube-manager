@@ -25,12 +25,70 @@ Qube-manager listens to Nostr events from a configured list of trusted public ke
 
 ## Installation
 
-### Prerequisites
+### Quick Install (Recommended)
+
+Install qube-manager with a single command (similar to Docker's installation):
+
+**Using curl:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/hypercore-one/qube-manager/master/scripts/install.sh | sh
+```
+
+**Using wget:**
+```bash
+wget -qO- https://raw.githubusercontent.com/hypercore-one/qube-manager/master/scripts/install.sh | sh
+```
+
+The installation script will:
+- Detect your OS and architecture automatically
+- Download the latest release binary
+- Verify the SHA256 checksum
+- Install to `/usr/local/bin/qube-manager`
+- Create a systemd service (Linux) or launchd service (macOS)
+- Generate default configuration with HC1 dev npubs pre-configured
+- Set up the `~/.qube-manager` directory
+
+**After installation:**
+
+Linux (systemd):
+```bash
+# Start the service
+sudo systemctl start qube-manager
+
+# Enable on boot
+sudo systemctl enable qube-manager
+
+# Check status
+sudo systemctl status qube-manager
+
+# View logs
+sudo journalctl -u qube-manager -f
+```
+
+macOS (launchd):
+```bash
+# Load the service
+launchctl load ~/Library/LaunchAgents/com.hypercore.qube-manager.plist
+
+# Check if running
+launchctl list | grep qube-manager
+
+# View logs
+tail -f ~/.qube-manager/qube-manager.log
+```
+
+### Manual Installation
+
+Download pre-built binaries from the [releases page](https://github.com/hypercore-one/qube-manager/releases).
+
+### Building from Source
+
+#### Prerequisites
 
 - Go 1.21 or higher
 - Make (optional, for using Makefile)
 
-### Build
+#### Build
 
 **Quick build:**
 ```bash
@@ -65,17 +123,24 @@ Qube-manager stores its configuration in `~/.qube-manager/` (or a custom directo
 relays:
   - wss://nostr.zenon.network
 follows:
-  - npub1sr47j9awvw2xa0m4w770dr2rl7ylzq4xt9k5rel3h4h58sc3mjysx6pj64
-quorum: 1
+  - npub1sr47j9awvw2xa0m4w770dr2rl7ylzq4xt9k5rel3h4h58sc3mjysx6pj64  # George
+  - npub1ackp65pgrxp6r27jw82p68cv572r8yxgasnpaqnd2mzexr09gc3ss24gcw  # Vilkris
+  - npub1mwwt7lxz5cyd3kgl5xmru8e2af2ajkuxrjsulyl6edwplwj36e3qkjwwaa  # Cryptofish
+  - npub1aels8qtlje0m8q5z89pquk2cqq37kxzwzshafnmeccvlat3jqrpslh7rph  # Deeznnutz
+  - npub1k52c552mgr75gzm8swar0y0nw4ctwwevlxtrx4ftvqypssafl3fsjgyt4v  # Coinselor
+  - npub17uv2z8hrm90fuznz27xaxxagy7ysx5p9xfhqenq0yf3lueqnj8rqm70h8s  # Sl0th
+quorum: 3
 network: hqz
 node_id: node-a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
 
 - `relays`: List of Nostr relay WebSocket URLs to connect to
-- `follows`: List of npub (Nostr public keys) to trust for voting
-- `quorum`: Minimum number of votes required to trigger an action
+- `follows`: List of npub (Nostr public keys) to trust for voting (all 6 HC1 developer npubs are pre-configured by default)
+- `quorum`: Minimum number of votes required to trigger an action (default: 3 out of 6 HC1 devs for production safety)
 - `network`: Network identifier (e.g., "hqz", "testnet") - only process events for this network
 - `node_id`: Unique identifier for this node (auto-generated UUID)
+
+**Note:** The `follows` list is pre-configured with all 6 official HC1 developer npubs (George, Vilkris, Cryptofish, Deeznnutz, Coinselor, Sl0th). You generally don't need to modify this unless instructed by the HC1 team.
 
 **`keys.json`**: Your Nostr identity (auto-generated)
 ```json

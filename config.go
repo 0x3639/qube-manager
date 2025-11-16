@@ -22,6 +22,19 @@ type Config struct {
 	ConfigPath string   `yaml:"-"`       // Path to config directory (not in YAML)
 }
 
+// getDefaultHC1Devs returns the list of official HC1 developer npubs
+// These are the trusted developers authorized to sign upgrade/reboot signals
+func getDefaultHC1Devs() []string {
+	return []string{
+		"npub1sr47j9awvw2xa0m4w770dr2rl7ylzq4xt9k5rel3h4h58sc3mjysx6pj64", // George
+		"npub1ackp65pgrxp6r27jw82p68cv572r8yxgasnpaqnd2mzexr09gc3ss24gcw", // Vilkris
+		"npub1mwwt7lxz5cyd3kgl5xmru8e2af2ajkuxrjsulyl6edwplwj36e3qkjwwaa", // Cryptofish
+		"npub1aels8qtlje0m8q5z89pquk2cqq37kxzwzshafnmeccvlat3jqrpslh7rph", // Deeznnutz
+		"npub1k52c552mgr75gzm8swar0y0nw4ctwwevlxtrx4ftvqypssafl3fsjgyt4v", // Coinselor
+		"npub17uv2z8hrm90fuznz27xaxxagy7ysx5p9xfhqenq0yf3lueqnj8rqm70h8s", // Sl0th
+	}
+}
+
 // generateNodeID creates a random UUID-like identifier for the node
 func generateNodeID() string {
 	b := make([]byte, 16)
@@ -40,11 +53,9 @@ func loadConfig(configDir string) Config {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		log.Printf("[WARN] Config file not found at %s, creating default config", path)
 		defaultCfg := Config{
-			Relays: []string{"wss://nostr.zenon.network"},
-			Follows: []string{
-				"npub1sr47j9awvw2xa0m4w770dr2rl7ylzq4xt9k5rel3h4h58sc3mjysx6pj64", // george
-			},
-			Quorum:  1,
+			Relays:  []string{"wss://nostr.zenon.network"},
+			Follows: getDefaultHC1Devs(),
+			Quorum:  3, // Require 3 out of 6 HC1 devs for production safety
 			Network: "hqz",
 			NodeID:  generateNodeID(),
 		}
