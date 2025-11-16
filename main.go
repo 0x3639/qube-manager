@@ -283,6 +283,27 @@ func main() {
 			}
 			log.Printf("[INFO] Connected to relay: %s (took %v)", relayURL, time.Since(start))
 
+			// Perform NIP-42 authentication
+			_, privKey, err := nip19.Decode(keypair.Nsec)
+			if err != nil {
+				log.Printf("[ERROR] Failed to decode private key for AUTH on %s: %v", relayURL, err)
+				return
+			}
+
+			err = relay.Auth(ctx, func(authEvent *nostr.Event) error {
+				if err := authEvent.Sign(privKey.(string)); err != nil {
+					log.Printf("[ERROR] Failed to sign AUTH event for %s: %v", relayURL, err)
+					return err
+				}
+				return nil
+			})
+			if err != nil {
+				log.Printf("[WARN] Authentication failed for %s: %v", relayURL, err)
+				// Continue anyway - relay might not require auth or auth might be optional
+			} else {
+				log.Printf("[INFO] Authenticated with relay %s", relayURL)
+			}
+
 			// Decode all npubs to hex pubkeys for filtering
 			hexFollows := make([]string, 0, len(config.Follows))
 			for _, npub := range config.Follows {

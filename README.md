@@ -18,6 +18,7 @@ Qube-manager listens to Nostr events from a configured list of trusted public ke
   - `upgrade`: Trigger version upgrades with binary hash validation
   - `reboot`: Trigger reboots with a new genesis URL
 - **Nostr integration**: Uses HyperSignal (kind 33321) and QubeManager (kind 3333) events
+- **NIP-42 authentication**: Automatically authenticates with relays for secure event access
 - **Qubestr compatibility**: Fully compatible with Qubestr relay tag-based validation
 - **Key management**: Automatically generates and stores Nostr keypairs
 - **Message publishing**: Send upgrade/reboot proposals to the network
@@ -170,15 +171,16 @@ Run the manager to listen for and process messages:
 
 The manager will:
 1. Connect to configured relays (in parallel)
-2. Subscribe to kind=33321 HyperSignal events from followed npubs
-3. Filter events by network tag (only process our network)
-4. Parse upgrade/reboot messages from event tags
-5. Track votes for each action (with vote clearing for superseded signals)
-6. Check quorum every 60 seconds automatically
-7. Execute the highest version action that meets quorum
-8. Publish a kind=3333 QubeManager status event upon completion
-9. Save the action to history to prevent duplicate execution
-10. Continue running until SIGINT/SIGTERM (Ctrl+C)
+2. Authenticate with relays using NIP-42 (required for reading kind=33321 events)
+3. Subscribe to kind=33321 HyperSignal events from followed npubs
+4. Filter events by network tag (only process our network)
+5. Parse upgrade/reboot messages from event tags
+6. Track votes for each action (with vote clearing for superseded signals)
+7. Check quorum every 60 seconds automatically
+8. Execute the highest version action that meets quorum
+9. Publish a kind=3333 QubeManager status event upon completion
+10. Save the action to history to prevent duplicate execution
+11. Continue running until SIGINT/SIGTERM (Ctrl+C)
 
 ### Command-Line Options
 
@@ -295,21 +297,23 @@ Published by nodes to acknowledge completion:
 
 1. **Daemon Mode**: The manager runs continuously as a daemon, connecting to all configured relays in parallel
 
-2. **Event Listening**: Subscribes to kind=33321 (HyperSignal) events from trusted npubs, filtered by `d` tag = "hyperqube"
+2. **Authentication**: Automatically performs NIP-42 authentication with each relay using the node's keypair, enabling secure read/write access to events
 
-3. **Network Filtering**: Only processes events where the `network` tag matches the configured network
+3. **Event Listening**: Subscribes to kind=33321 (HyperSignal) events from trusted npubs, filtered by `d` tag = "hyperqube"
 
-4. **Voting with Superseding**: Each HyperSignal from a followed npub counts as one vote. Newer signals from the same npub automatically supersede (clear votes for) their older signals
+4. **Network Filtering**: Only processes events where the `network` tag matches the configured network
 
-5. **Periodic Quorum Check**: Every 60 seconds, checks if any action has reached quorum
+5. **Voting with Superseding**: Each HyperSignal from a followed npub counts as one vote. Newer signals from the same npub automatically supersede (clear votes for) their older signals
 
-6. **Selection**: Among all eligible actions not in history, selects the one with the highest semantic version
+6. **Periodic Quorum Check**: Every 60 seconds, checks if any action has reached quorum
 
-7. **Execution**: Logs the selected action and publishes a kind=3333 status event back to the network
+7. **Selection**: Among all eligible actions not in history, selects the one with the highest semantic version
 
-8. **History**: Saves the action to history to ensure it won't be executed again
+8. **Execution**: Logs the selected action and publishes a kind=3333 status event back to the network
 
-9. **Graceful Shutdown**: Continues running until SIGINT/SIGTERM, then cleanly shuts down all goroutines
+9. **History**: Saves the action to history to ensure it won't be executed again
+
+10. **Graceful Shutdown**: Continues running until SIGINT/SIGTERM, then cleanly shuts down all goroutines
 
 ## Logging
 
