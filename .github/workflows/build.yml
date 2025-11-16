@@ -1,0 +1,127 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ master, feature/* ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Get version info
+      id: version
+      run: |
+        # Get latest git tag or use 'dev'
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+        COMMIT=$(git rev-parse --short HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "date=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Build
+      run: |
+        go build -v \
+          -ldflags="-X 'main.Version=${{ steps.version.outputs.version }}' \
+                    -X 'main.GitCommit=${{ steps.version.outputs.commit }}' \
+                    -X 'main.BuildDate=${{ steps.version.outputs.date }}'" \
+          -o qube-manager .
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run tests
+      run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.txt
+        fail_ci_if_error: false
+
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: qube-manager-linux-amd64
+        path: qube-manager
+        retention-days: 7
+
+  build-multiplatform:
+    name: Build (Multi-platform)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Get version info
+      id: version
+      run: |
+        VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+        COMMIT=$(git rev-parse --short HEAD)
+        DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+        echo "date=${DATE}" >> $GITHUB_OUTPUT
+
+    - name: Build
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        OUTPUT_NAME=qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}
+        if [ "${{ matrix.goos }}" = "windows" ]; then
+          OUTPUT_NAME="${OUTPUT_NAME}.exe"
+        fi
+        go build -v \
+          -ldflags="-X 'main.Version=${{ steps.version.outputs.version }}' \
+                    -X 'main.GitCommit=${{ steps.version.outputs.commit }}' \
+                    -X 'main.BuildDate=${{ steps.version.outputs.date }}'" \
+          -o "${OUTPUT_NAME}" .
+        ls -lh "${OUTPUT_NAME}"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: qube-manager-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: qube-manager-*
+        retention-days: 7

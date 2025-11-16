@@ -163,13 +163,20 @@ func checkAndExecuteQuorum(
 func main() {
 	// Command-line flags
 	var (
-		dryRun    = flag.Bool("dry-run", false, "Perform a trial run without saving actions")
-		configDir = flag.String("config-dir", filepath.Join(os.Getenv("HOME"), ".qube-manager"), "Configuration directory")
-		verbose   = flag.Bool("verbose", false, "Enable verbose logging including go-nostr logs")
+		dryRun     = flag.Bool("dry-run", false, "Perform a trial run without saving actions")
+		configDir  = flag.String("config-dir", filepath.Join(os.Getenv("HOME"), ".qube-manager"), "Configuration directory")
+		verbose    = flag.Bool("verbose", false, "Enable verbose logging including go-nostr logs")
+		showVersion = flag.Bool("version", false, "Show version information and exit")
 	)
 	flag.Parse()
 
-	log.Printf("[INFO] Starting Qube Manager")
+	// Handle version flag
+	if *showVersion {
+		fmt.Println(VersionString())
+		os.Exit(0)
+	}
+
+	log.Printf("[INFO] Starting Qube Manager %s", Version)
 
 	if err := os.MkdirAll(*configDir, 0755); err != nil {
 		log.Fatalf("[ERROR] Failed to create config directory: %v", err)

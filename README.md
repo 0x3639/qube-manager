@@ -27,12 +27,31 @@ Qube-manager listens to Nostr events from a configured list of trusted public ke
 
 ### Prerequisites
 
-- Go 1.19 or higher
+- Go 1.21 or higher
+- Make (optional, for using Makefile)
 
 ### Build
 
+**Quick build:**
 ```bash
 go build -o qube-manager .
+```
+
+**Build with version information (recommended):**
+```bash
+make build
+```
+
+**Build for all platforms:**
+```bash
+make build-all
+```
+
+The Makefile automatically injects version information from git tags and commit hashes into the binary.
+
+**Check version:**
+```bash
+./qube-manager --version
 ```
 
 ## Configuration
