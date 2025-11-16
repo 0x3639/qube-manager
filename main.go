@@ -233,6 +233,14 @@ func main() {
 	// Map of action key -> set of pubkeys that voted for this action
 	votes := make(map[string]map[string]bool)
 
+	// Track latest signal from each dev for single active message model
+	// Map: dev_pubkey -> latest created_at timestamp
+	latestSignal := make(map[string]nostr.Timestamp)
+
+	// Track which action key each dev's latest signal created
+	// Map: dev_pubkey -> action_key
+	signalActionMap := make(map[string]string)
+
 	// Mutex for thread-safe access to actions and votes maps
 	var actionsMux sync.RWMutex
 
@@ -347,6 +355,29 @@ func main() {
 				// Lock for writing to actions/votes maps
 				actionsMux.Lock()
 
+				// Single active message model: Check if this is a newer signal from this dev
+				if prevTimestamp, exists := latestSignal[ev.PubKey]; exists {
+					if ev.CreatedAt > prevTimestamp {
+						// This is a newer signal from the same dev - clear old votes
+						if oldActionKey, hasOldAction := signalActionMap[ev.PubKey]; hasOldAction {
+							// Remove this dev's vote from the old action
+							if oldVotes, oldVotesExist := votes[oldActionKey]; oldVotesExist {
+								delete(oldVotes, ev.PubKey)
+								log.Printf("[INFO] Cleared vote from pubkey %s for old action %s (superseded by newer signal)",
+									ev.PubKey[:8]+"...", oldActionKey)
+							}
+						}
+					} else {
+						// This signal is older than what we've already seen from this dev - ignore it
+						actionsMux.Unlock()
+						if *verbose {
+							log.Printf("[DEBUG] Ignoring older signal from pubkey %s (timestamp %d < %d)",
+								ev.PubKey[:8]+"...", ev.CreatedAt, prevTimestamp)
+						}
+						continue
+					}
+				}
+
 				switch action {
 				case "upgrade":
 					key := fmt.Sprintf("upgrade:%s", v.Original())
@@ -367,6 +398,10 @@ func main() {
 						votes[key] = make(map[string]bool)
 					}
 					votes[key][ev.PubKey] = true
+
+					// Update tracking for single active message model
+					latestSignal[ev.PubKey] = ev.CreatedAt
+					signalActionMap[ev.PubKey] = key
 
 					log.Printf("[INFO] Parsed upgrade signal: version=%s network=%s hash=%s pubkey=%s",
 						v.Original(), network, hash[:8]+"...", ev.PubKey[:8]+"...")
@@ -404,6 +439,10 @@ func main() {
 						votes[key] = make(map[string]bool)
 					}
 					votes[key][ev.PubKey] = true
+
+					// Update tracking for single active message model
+					latestSignal[ev.PubKey] = ev.CreatedAt
+					signalActionMap[ev.PubKey] = key
 
 					log.Printf("[INFO] Parsed reboot signal: version=%s network=%s genesis=%s hash=%s pubkey=%s",
 						v.Original(), network, genesisURL, hash[:8]+"...", ev.PubKey[:8]+"...")
