@@ -288,29 +288,8 @@ func main() {
 	}
 	log.Printf("[INFO] Decoded %d valid npubs for following", len(hexFollows))
 
-	// Decode private key for NIP-42 authentication
-	_, privKey, err := nip19.Decode(keypair.Nsec)
-	if err != nil {
-		log.Fatalf("[ERROR] Failed to decode private key: %v", err)
-	}
-
-	// Create auth handler for NIP-42 authentication
-	authHandler := nostr.WithAuthHandler(func(authCtx context.Context, authEvent nostr.RelayEvent) error {
-		evt := authEvent.Event
-		if *verbose {
-			log.Printf("[DEBUG] Relay %s requested auth, signing challenge", authEvent.Relay.URL)
-			log.Printf("[DEBUG] AUTH challenge tags: %v", evt.Tags)
-		}
-		if err := evt.Sign(privKey.(string)); err != nil {
-			log.Printf("[ERROR] Failed to sign AUTH event for %s: %v", authEvent.Relay.URL, err)
-			return err
-		}
-		log.Printf("[INFO] Authenticated with relay %s", authEvent.Relay.URL)
-		return nil
-	})
-
-	// Create SimplePool with auth handler for proper NIP-42 support
-	pool := nostr.NewSimplePool(ctx, authHandler)
+	// Create SimplePool without authentication (Qubestr allows unauthenticated reads and kind 3333 writes)
+	pool := nostr.NewSimplePool(ctx)
 
 	// Subscribe to kind=33321 (HyperSignal) events from followed pubkeys across all relays
 	filters := nostr.Filters{{
