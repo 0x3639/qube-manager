@@ -124,14 +124,14 @@ check_existing_installation() {
         if echo "$CURRENT_VERSION" | grep -q "$LATEST_RELEASE"; then
             warn "Latest version (${LATEST_RELEASE}) is already installed"
             printf "Reinstall anyway? (y/N): "
-            read -r REPLY
+            read -r REPLY </dev/tty
             if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
                 info "Installation cancelled"
                 exit 0
             fi
         else
             printf "Upgrade to ${LATEST_RELEASE}? (y/N): "
-            read -r REPLY
+            read -r REPLY </dev/tty
             if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
                 info "Upgrade cancelled"
                 exit 0
