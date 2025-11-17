@@ -109,6 +109,63 @@ get_latest_release() {
     info "Latest release: ${LATEST_RELEASE}"
 }
 
+# Check for existing installation
+check_existing_installation() {
+    if [ -f "${INSTALL_DIR}/qube-manager" ]; then
+        info "Existing installation detected"
+
+        # Get current version
+        CURRENT_VERSION=$("${INSTALL_DIR}/qube-manager" --version 2>/dev/null | head -n1 || echo "unknown")
+
+        info "Current version: ${CURRENT_VERSION}"
+        info "Latest version:  ${LATEST_RELEASE}"
+
+        # Check if versions are the same
+        if echo "$CURRENT_VERSION" | grep -q "$LATEST_RELEASE"; then
+            warn "Latest version (${LATEST_RELEASE}) is already installed"
+            printf "Reinstall anyway? (y/N): "
+            read -r REPLY
+            if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
+                info "Installation cancelled"
+                exit 0
+            fi
+        else
+            printf "Upgrade to ${LATEST_RELEASE}? (y/N): "
+            read -r REPLY
+            if [ "$REPLY" != "y" ] && [ "$REPLY" != "Y" ]; then
+                info "Upgrade cancelled"
+                exit 0
+            fi
+            IS_UPGRADE=1
+        fi
+    else
+        IS_UPGRADE=0
+    fi
+}
+
+# Stop running service before upgrade
+stop_service() {
+    if [ "$IS_UPGRADE" != "1" ]; then
+        return
+    fi
+
+    info "Stopping service before upgrade..."
+
+    if [ "$OS" = "linux" ]; then
+        if systemctl is-active --quiet qube-manager 2>/dev/null; then
+            $SUDO systemctl stop qube-manager
+            info "Systemd service stopped"
+            SERVICE_WAS_RUNNING=1
+        fi
+    elif [ "$OS" = "darwin" ]; then
+        if launchctl list | grep -q com.hypercore.qube-manager 2>/dev/null; then
+            launchctl unload "$HOME/Library/LaunchAgents/com.hypercore.qube-manager.plist" 2>/dev/null || true
+            info "Launchd service stopped"
+            SERVICE_WAS_RUNNING=1
+        fi
+    fi
+}
+
 # Download binary
 download_binary() {
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${LATEST_RELEASE}/${BINARY_NAME}"
@@ -288,64 +345,95 @@ main() {
     check_root
     detect_platform
     get_latest_release
+    check_existing_installation
+    stop_service
     download_binary
     install_binary
     setup_config
 
-    # Create service based on OS
-    if [ "$OS" = "linux" ]; then
-        create_systemd_service
-    elif [ "$OS" = "darwin" ]; then
-        create_launchd_service
+    # Create service based on OS (only if not upgrading)
+    if [ "$IS_UPGRADE" != "1" ]; then
+        if [ "$OS" = "linux" ]; then
+            create_systemd_service
+        elif [ "$OS" = "darwin" ]; then
+            create_launchd_service
+        fi
     fi
 
     echo ""
     info "==================================================="
-    info "  Installation Complete!"
+    if [ "$IS_UPGRADE" = "1" ]; then
+        info "  Upgrade Complete!"
+    else
+        info "  Installation Complete!"
+    fi
     info "==================================================="
     echo ""
     info "Qube Manager has been installed to: ${INSTALL_DIR}/qube-manager"
     info "Configuration directory: ${CONFIG_DIR}"
     echo ""
-    info "Next steps:"
-    echo ""
 
-    if [ "$OS" = "linux" ]; then
-        info "1. Review and edit configuration:"
-        echo "   vi ${CONFIG_DIR}/config.yaml"
+    if [ "$IS_UPGRADE" = "1" ]; then
+        if [ "$SERVICE_WAS_RUNNING" = "1" ]; then
+            warn "Service was stopped for upgrade"
+            echo ""
+            info "To restart the service:"
+            if [ "$OS" = "linux" ]; then
+                echo "   ${SUDO} systemctl start qube-manager"
+            elif [ "$OS" = "darwin" ]; then
+                echo "   launchctl load ~/Library/LaunchAgents/com.hypercore.qube-manager.plist"
+            fi
+        else
+            info "Start the service to use the new version:"
+            if [ "$OS" = "linux" ]; then
+                echo "   ${SUDO} systemctl start qube-manager"
+            elif [ "$OS" = "darwin" ]; then
+                echo "   launchctl load ~/Library/LaunchAgents/com.hypercore.qube-manager.plist"
+            fi
+        fi
         echo ""
-        info "2. Start the service:"
-        echo "   ${SUDO} systemctl start qube-manager"
-        echo ""
-        info "3. Enable service to start on boot:"
-        echo "   ${SUDO} systemctl enable qube-manager"
-        echo ""
-        info "4. Check service status:"
-        echo "   ${SUDO} systemctl status qube-manager"
-        echo ""
-        info "5. View logs:"
-        echo "   ${SUDO} journalctl -u qube-manager -f"
-    elif [ "$OS" = "darwin" ]; then
-        info "1. Review and edit configuration:"
-        echo "   vi ${CONFIG_DIR}/config.yaml"
-        echo ""
-        info "2. Load the service:"
-        echo "   launchctl load ~/Library/LaunchAgents/com.hypercore.qube-manager.plist"
-        echo ""
-        info "3. Check if service is running:"
-        echo "   launchctl list | grep qube-manager"
-        echo ""
-        info "4. View logs:"
-        echo "   tail -f ${CONFIG_DIR}/qube-manager.log"
     else
-        info "1. Review and edit configuration:"
-        echo "   vi ${CONFIG_DIR}/config.yaml"
+        info "Next steps:"
         echo ""
-        info "2. Run qube-manager:"
-        echo "   qube-manager"
+
+        if [ "$OS" = "linux" ]; then
+            info "1. Review and edit configuration:"
+            echo "   vi ${CONFIG_DIR}/config.yaml"
+            echo ""
+            info "2. Start the service:"
+            echo "   ${SUDO} systemctl start qube-manager"
+            echo ""
+            info "3. Enable service to start on boot:"
+            echo "   ${SUDO} systemctl enable qube-manager"
+            echo ""
+            info "4. Check service status:"
+            echo "   ${SUDO} systemctl status qube-manager"
+            echo ""
+            info "5. View logs:"
+            echo "   ${SUDO} journalctl -u qube-manager -f"
+        elif [ "$OS" = "darwin" ]; then
+            info "1. Review and edit configuration:"
+            echo "   vi ${CONFIG_DIR}/config.yaml"
+            echo ""
+            info "2. Load the service:"
+            echo "   launchctl load ~/Library/LaunchAgents/com.hypercore.qube-manager.plist"
+            echo ""
+            info "3. Check if service is running:"
+            echo "   launchctl list | grep qube-manager"
+            echo ""
+            info "4. View logs:"
+            echo "   tail -f ${CONFIG_DIR}/qube-manager.log"
+        else
+            info "1. Review and edit configuration:"
+            echo "   vi ${CONFIG_DIR}/config.yaml"
+            echo ""
+            info "2. Run qube-manager:"
+            echo "   qube-manager"
+        fi
+
+        echo ""
     fi
 
-    echo ""
     info "Documentation: https://github.com/${REPO}"
     echo ""
 }
